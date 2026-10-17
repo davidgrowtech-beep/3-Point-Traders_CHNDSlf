@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=2696687960749452&ev=PageView&noscript=1"/></noscript>
+<noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=1462146039130125&ev=PageView&noscript=1"/></noscript>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Learn with 3 Point Traders</title>
@@ -214,6 +214,15 @@
   @media (min-width:768px){#page{max-width:520px;}}
   @media (max-width:340px){.hero{padding:26px 14px 22px;} .points,.benefits,.finalCta{padding-left:12px; padding-right:12px;}}
   @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important;}}
+
+  /* ===== Confirm sheet buttons ===== */
+  .cfBtn{display:block; width:100%; text-align:center; border:none; cursor:pointer; border-radius:12px; padding:13px 14px; font-family:'Poppins',sans-serif; font-weight:800; font-size:15px; line-height:1.3; touch-action:manipulation; -webkit-tap-highlight-color:transparent;}
+  .cfBtn .ta{display:block; font-family:'Noto Sans Tamil',sans-serif; font-weight:600; font-size:12px; margin-top:2px;}
+  .cfBtn.yes{background:var(--green); color:#04210f; margin-top:6px;}
+  .cfBtn.again{background:var(--bg-alt); color:#fff; border:1px solid var(--line); margin-top:10px;}
+  .cfBtn.wait{filter:grayscale(.85) brightness(.7); pointer-events:none;}
+  .cfDone{display:none; text-align:center; padding:10px 0 6px; font-size:14px; line-height:1.7; color:#fff;}
+  .cfDone .ta{display:block; color:var(--gold-bright); font-family:'Noto Sans Tamil',sans-serif;}
 </style>
 </head>
 <body>
@@ -344,6 +353,22 @@
 
 </div>
 
+<div class="sheet" id="cf" role="dialog" aria-modal="true">
+  <div class="panel">
+    <button class="x" id="cfX" type="button" aria-label="Close">&times;</button>
+    <div id="cfBody">
+      <h3>Did you tap "REQUEST TO JOIN"?<span class="ta">Telegram-ல் "REQUEST TO JOIN" அழுத்தினீர்களா?</span></h3>
+      <div class="tgMock">
+        <div class="rq">REQUEST TO JOIN</div>
+        <span class="up">&#9757; Tap this blue button inside Telegram<br>Telegram-ல் இந்த நீல பட்டனை அழுத்தவும்</span>
+      </div>
+      <button type="button" class="cfBtn yes wait" id="cfYes">&#9989; Yes, I sent the request<span class="ta">ஆம், அழுத்திவிட்டேன்</span></button>
+      <a href="#" rel="noopener" class="cfBtn again jnBtn2">&#128178; No &mdash; open Telegram again<span class="ta">இல்லை, மீண்டும் திறக்கவும்</span></a>
+    </div>
+    <div class="cfDone" id="cfDone">&#127881; Great! Now wait for admin approval in Telegram.<span class="ta">அருமை! Telegram-ல் admin approve செய்யும் வரை காத்திருக்கவும்.</span></div>
+  </div>
+</div>
+
 <div class="backBar" id="back">Did you tap <b>"REQUEST TO JOIN"</b> in Telegram?
   <span class="ta">Telegram-ல் <b>"REQUEST TO JOIN"</b> அழுத்தினீர்களா? இல்லையெனில் மீண்டும் திறக்கவும்.</span>
   <a href="#" class="tgFallback" rel="noopener">📲 Open Telegram again · மீண்டும் திறக்கவும்</a></div>
@@ -357,7 +382,11 @@
     telegramInvite: ['nScfyRM4Yr','ZjYzE1'].join(''),
     pageViewDelayMs: 1000,
     passiveReaderDelayMs: 3000,
-    minimumClickTimeMs: 1500,
+    minimumClickTimeMs: 2500,      // tap before this = no Lead eligibility (accidental / bot-speed taps)
+    minAwayMs: 6000,               // must stay out of the page (inside Telegram) at least this long
+    maxAwayMs: 30*60*1000,         // returning after >30 min = unrelated visit, ignored
+    confirmEnableMs: 2000,         // "Yes" button stays locked for 2s (stops reflex taps)
+    leadMode: 'confirm',           // 'confirm' = Lead only after Yes tap | 'return' = Lead on return from Telegram (no question)
     sessionKey: 'tpt_qualified_page_view',
     leadKey: 'tpt_lead_v2',
     leadWindowMs: 12*60*60*1000
@@ -396,61 +425,103 @@
 
   const androidIntent = () => `intent://join?invite=${CONFIG.telegramInvite}#Intent;scheme=tg;S.browser_fallback_url=${encodeURIComponent(CONFIG.telegramUrl)};end`;
 
-  /* ===== Direct Telegram buttons (always unlocked) =====
-     Real <a href> links: tapping opens Telegram instantly, no form, no popup, no preventDefault, no delay.
-     JS only decides whether the Lead pixel fires (real tap + enough time on page + once per device per 12h).
-     The invite link is added by JS (not written in the HTML source). */
+  /* ===== Telegram buttons + "real request" Lead logic =====
+     - Buttons are real <a href> links: Telegram opens instantly, no form, no popup, no preventDefault, no delay.
+     - TAP DOES NOT FIRE Lead any more. A tap only starts an "attempt".
+     - Lead fires only after ALL of these are true:
+         1) real finger tap (isTrusted, not automation) after >= minimumClickTimeMs on the page
+         2) the page really went to the background (visitor is inside Telegram)
+         3) visitor stayed away >= minAwayMs (enough time to actually press REQUEST TO JOIN)
+         4) visitor comes back and taps "Yes, I sent the request" (leadMode 'confirm'; Yes unlocks after 2s)
+     - once per device per 12h; fake / accidental / repeat taps never become a Lead. */
   const $ = id => document.getElementById(id);
-  const back = $('back');
+  const back = $('back'), sheet = $('cf'), cfYes = $('cfYes'), cfBody = $('cfBody'), cfDone = $('cfDone');
   const tgUrl = CONFIG.telegramUrl;
-  /* Android inside Facebook/Instagram: tg:// intent (falls back to the https link). Everything else: plain https link,
-     which is the most reliable on iPhone and normal browsers (custom tg:// links are blocked inside iOS in-app browsers). */
   const btnHref = () => (isFbIab() && isAndroid()) ? androidIntent() : tgUrl;
-  let clickedAt = 0, handedOff = false, watch = null;
+  let attempt = null, pending = null, handedOff = false, hiddenAt = 0, watch = null, enableTimer = null;
 
   function setLinks() {
-    document.querySelectorAll('.jnBtn').forEach(a => a.setAttribute('href', btnHref()));
+    document.querySelectorAll('.jnBtn, .jnBtn2').forEach(a => a.setAttribute('href', btnHref()));
     document.querySelectorAll('.tgFallback').forEach(a => a.setAttribute('href', tgUrl));
   }
 
-  /* one Lead per device per 12h (stops reload / repeat taps inflating Meta results) */
-  const leadDone = () => { try { const t = +localStorage.getItem(CONFIG.leadKey); return t && Date.now() - t < CONFIG.leadWindowMs; } catch (e) { return leadTracked; } };
+  const leadDone = () => { try { const t = +localStorage.getItem(CONFIG.leadKey); return !!t && Date.now() - t < CONFIG.leadWindowMs; } catch (e) { return leadTracked; } };
   const leadMark = () => { leadTracked = true; try { localStorage.setItem(CONFIG.leadKey, String(Date.now())); } catch (e) {} };
+  const track = (name, data) => { try { if (typeof window.fbq === 'function') fbq('trackCustom', name, data || {}); } catch (x) {} };
+  const closeSheet = () => { sheet.classList.remove('show'); clearTimeout(enableTimer); };
 
-  /* handoff evidence: did the page really go to Telegram? */
-  const markOff = () => { handedOff = true; };
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') markOff(); });
-  window.addEventListener('pagehide', markOff);
-  window.addEventListener('blur', markOff);
+  function fireLead(a, awayMs, confirmed) {
+    if (leadDone() || typeof window.fbq !== 'function') return false;
+    const id = 'ld_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+    try {
+      fbq('track', 'Lead', { value: 0, currency: 'INR', destination: 'Telegram', confirmed: confirmed ? 1 : 0, away_s: Math.round(awayMs / 1000), time_on_page: a.onPage }, { eventID: id });
+    } catch (x) { return false; }
+    leadMark();
+    return true;
+  }
 
-  function onJoin(e) {
-    /* scripted clicks never count and never open */
+  /* 1) tap -> start attempt (NO Lead here) */
+  function startAttempt(e) {
     if (!e.isTrusted || automation()) { e.preventDefault(); return; }
-    /* Lead only for a real tap after a real amount of time on the page */
     const t = Date.now() - pageOpenedAt;
-    if (document.visibilityState === 'visible' && t >= CONFIG.minimumClickTimeMs && !leadDone() && typeof window.fbq === 'function') {
-      const id = 'ld_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
-      try { fbq('track', 'Lead', { value: 0, currency: 'INR', destination: 'Telegram', time_on_page: Math.round(t / 1000) }, { eventID: id }); } catch (x) {}
-      leadMark();
-    }
-    clickedAt = Date.now(); handedOff = false;
-    /* navigation is left 100% native (the link's own href) */
+    attempt = {
+      at: Date.now(), onPage: Math.round(t / 1000),
+      eligible: document.visibilityState === 'visible' && t >= CONFIG.minimumClickTimeMs && !leadDone() && typeof window.fbq === 'function'
+    };
+    pending = null; handedOff = false; hiddenAt = 0;
+    back.style.display = 'none'; closeSheet();
+    track('TgTap', { eligible: attempt.eligible ? 1 : 0, time_on_page: attempt.onPage, in_app: isFbIab() ? 1 : 0, os: isAndroid() ? 'android' : (isIOS() ? 'ios' : 'other') });
+    /* navigation stays 100% native; this only shows the help note if Telegram did not open */
     clearTimeout(watch);
     watch = setTimeout(() => {
       const stuck = !handedOff && document.visibilityState === 'visible';
-      try { fbq('trackCustom', 'TgHandoff', { result: stuck ? 'stuck' : 'ok', in_app: isFbIab() ? 1 : 0, os: isAndroid() ? 'android' : (isIOS() ? 'ios' : 'other') }); } catch (x) {}
+      track('TgHandoff', { result: stuck ? 'stuck' : 'ok', in_app: isFbIab() ? 1 : 0, os: isAndroid() ? 'android' : (isIOS() ? 'ios' : 'other') });
       if (stuck) document.querySelectorAll('[data-note]').forEach(n => n.classList.add('show'));
     }, 2200);
   }
 
-  /* came back from Telegram: gentle reminder to finish "Request to Join" (no new Lead) */
-  const showBack = () => { if (clickedAt && Date.now() - clickedAt > 1500) back.style.display = 'block'; };
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') showBack(); });
-  window.addEventListener('pageshow', ev => { if (ev.persisted) showBack(); });
+  /* 2) leaving the page = inside Telegram (remember when) */
+  const markHidden = () => { handedOff = true; if (attempt && !hiddenAt) hiddenAt = Date.now(); };
+  document.addEventListener('visibilitychange', () => { document.visibilityState === 'hidden' ? markHidden() : onReturn(); });
+  window.addEventListener('pagehide', markHidden);
+  window.addEventListener('blur', () => { handedOff = true; });
+  window.addEventListener('pageshow', ev => { if (ev.persisted) onReturn(); });
+
+  /* 3) back on the page: was the visitor away long enough for a real request? */
+  function onReturn() {
+    if (!attempt || !hiddenAt || document.visibilityState !== 'visible') return;
+    const away = Date.now() - hiddenAt; hiddenAt = 0;
+    if (away > CONFIG.maxAwayMs) { attempt = null; return; }
+    const a = attempt;
+    track('TgAway', { away_s: Math.round(away / 1000), eligible: a.eligible ? 1 : 0 });
+    /* too fast / not eligible: no Lead, just the "open Telegram again" reminder */
+    if (!a.eligible || away < CONFIG.minAwayMs) { back.style.display = 'block'; return; }
+    if (CONFIG.leadMode === 'return') { fireLead(a, away, false); attempt = null; back.style.display = 'block'; return; }
+    openSheet(a, away);
+  }
+
+  /* 4) confirmation sheet (one tap, NOT a form) */
+  function openSheet(a, away) {
+    pending = { a: a, away: away };
+    cfBody.style.display = 'block'; cfDone.style.display = 'none';
+    cfYes.classList.add('wait');
+    sheet.classList.add('show');
+    clearTimeout(enableTimer);
+    enableTimer = setTimeout(() => cfYes.classList.remove('wait'), CONFIG.confirmEnableMs);
+  }
+  cfYes.addEventListener('click', e => {
+    if (!e.isTrusted || automation() || !pending || cfYes.classList.contains('wait')) return;
+    fireLead(pending.a, pending.away, true);
+    track('TgConfirm', { result: 'yes' });
+    attempt = null; pending = null;
+    cfBody.style.display = 'none'; cfDone.style.display = 'block';
+    setTimeout(closeSheet, 2600);
+  });
+  $('cfX').addEventListener('click', () => { track('TgConfirm', { result: 'dismiss' }); pending = null; attempt = null; closeSheet(); });
 
   function init() {
     setLinks();
-    document.querySelectorAll('.jnBtn').forEach(b => b.addEventListener('click', onJoin));
+    document.querySelectorAll('.jnBtn, .jnBtn2, .tgFallback').forEach(b => b.addEventListener('click', startAttempt));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
 })();
